@@ -69,20 +69,33 @@ public func checkCompatDest(host: Host, dst: String) throws {
 
 public enum CompatError: Error {
     case invalidDest(String)
-}
+ }
+ 
+ /// The stderr message for a MoveMailbox SOAP fault (pure: unit-tested).
+ public func compatFaultMessage(_ e: SoapFault) -> String {
+     var msg = "Error occurred: \(e.code): \(e.reason)"
+     if e.code.hasSuffix("UNKNOWN_DOCUMENT") || e.code.hasSuffix("UNKNOWN_SERVICE") {
+         msg += "\n(hint: the destination does not implement MoveMailbox " +
+                "(FOSS server?). Use `zmove move` or `zmove ne-move` instead, " +
+                "which perform the move without NE server code)"
+     }
+     return msg
+ }
 
-@discardableResult
-public func runMboxMove(settings: Settings, account: String, src: String, dst: String,
-                        sync: Bool = false, force: Bool = false,
-                        ngMigration: Bool = false,
-                        authtoken: String? = nil,
-                        authtokenFile: String? = nil) -> Int32 {
-    do {
-        let host = Host(name: dst, settings: settings)
-        try checkCompatDest(host: host, dst: dst)
-        let soap = AdminSoap(host: host, port: settings.adminPort,
-                             user: settings.adminUser, password: settings.adminPassword,
-                             verifyTLS: settings.verifyTLS, tlsCA: settings.tlsCa)
+ @discardableResult
+ public func runMboxMove(settings: Settings, account: String, src: String, dst: String,
+                         sync: Bool = false, force: Bool = false,
+                         ngMigration: Bool = false,
+                         authtoken: String? = nil,
+                         authtokenFile: String? = nil,
+                         hostFactory: ((String) -> Host)? = nil,
+                         soapFactory: ((Host) -> AdminSoap)? = nil) -> Int32 {
+     do {
+         let host = hostFactory?(dst) ?? Host(name: dst, settings: settings)
+         try checkCompatDest(host: host, dst: dst)
+         let soap = soapFactory?(host) ?? AdminSoap(host: host, port: settings.adminPort,
+                              user: settings.adminUser, password: settings.adminPassword,
+                              verifyTLS: settings.verifyTLS, tlsCA: settings.tlsCa)
         if let tok = try readAuthtoken(value: authtoken, path: authtokenFile) {
             soap.setToken(tok)
         } else {
@@ -91,19 +104,13 @@ public func runMboxMove(settings: Settings, account: String, src: String, dst: S
         if force { print(compatForceWarning); fflush(stdout) }
         _ = try soap.moveMailbox(name: account, src: src, dest: dst, sync: sync,
                                  skipRemoteLockout: force, ngMigration: ngMigration)
-    } catch let e as SoapFault {
-        var msg = "Error occurred: \(e.code): \(e.reason)"
-        if e.code.hasSuffix("UNKNOWN_DOCUMENT") || e.code.hasSuffix("UNKNOWN_SERVICE") {
-            msg += "\n(hint: the destination does not implement MoveMailbox " +
-                   "(FOSS server?). Use `zmove move` or `zmove ne-move` instead, " +
-                   "which perform the move without NE server code)"
-        }
-        fputs(msg + "\n", stderr)
-        return 1
-    } catch {
-        fputs("Error occurred: \(error)\n", stderr)
-        return 1
-    }
+     } catch let e as SoapFault {
+         fputs(compatFaultMessage(e) + "\n", stderr)
+         return 1
+     } catch {
+         fputs("Error occurred: \(error)\n", stderr)
+         return 1
+     }
     if sync {
         print("Mailbox move completed successfully"); fflush(stdout)
     } else {

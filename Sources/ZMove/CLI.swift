@@ -365,13 +365,17 @@ func printJob(_ j: Job, asJSON: Bool = false) {
         (j.error.map { "\n    error: \($0)" } ?? ""))
 }
 
-func confirmPurge(job: Job) -> Bool {
-    guard isStdinTTY() else { return false }
-    let want = job.data["src_mailbox_id"].map { "\($0)" } ?? "?"
-    fputs("type '\(job.account)' to purge mailbox \(want) on \(job.src): ", stderr)
-    guard let ans = readLine(strippingNewline: true) else { return false }
-    return ans.trimmingCharacters(in: .whitespaces) == job.account
-}
+ func confirmPurge(job: Job) -> Bool {
+     confirmPurge(job: job, isTTY: isStdinTTY(), readInput: { readLine(strippingNewline: true) })
+ }
+ 
+ func confirmPurge(job: Job, isTTY: Bool, readInput: () -> String?) -> Bool {
+     guard isTTY else { return false }
+     let want = job.data["src_mailbox_id"].map { "\($0)" } ?? "?"
+     fputs("type '\(job.account)' to purge mailbox \(want) on \(job.src): ", stderr)
+     guard let ans = readInput() else { return false }
+     return ans.trimmingCharacters(in: .whitespaces) == job.account
+ }
 
 func isStdinTTY() -> Bool {
 #if canImport(Darwin)

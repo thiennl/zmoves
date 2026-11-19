@@ -154,17 +154,19 @@ public final class BlobSync {
         try fsFree(host: host, path: path)?.1
     }
 
-    public func inventory(host: Host, dirs: [String]) throws -> (Int, Int) {
-        if dirs.isEmpty { return (0, 0) }
-        let dq = dirs.map { quote($0) }.joined(separator: " ")
-        let out = try host.out("find \(dq) -type f -printf '%s\\n' 2>/dev/null | " +
-            "awk '{n++; s+=$1} END {printf \"%d %d\", n, s}'")
-        let parts = out.split(separator: " ").map(String.init)
-        if parts.count == 2, let n = Int(parts[0]), let s = Int(parts[1]) {
-            return (n, s)
-        }
-        return (0, 0)
-    }
+     public func inventory(host: Host, dirs: [String]) throws -> (Int, Int) {
+         /// (file count, apparent bytes) with merged-source dedup: a relative path
+         /// present in more than one source counts once, as rsync --delete merges them.
+         if dirs.isEmpty { return (0, 0) }
+         let dq = dirs.map { quote($0) }.joined(separator: " ")
+         let out = try host.out("find \(dq) -type f -printf '%P\\t%s\\n' 2>/dev/null | " +
+             "awk -F'\\t' '!seen[$1]++ {n++; s+=$2} END {printf \"%d %d\", n, s}'")
+         let parts = out.split(separator: " ").map(String.init)
+         if parts.count == 2, let n = Int(parts[0]), let s = Int(parts[1]) {
+             return (n, s)
+         }
+         return (0, 0)
+     }
 
     public func du(host: Host, dirs: [String]) throws -> Int {
         try inventory(host: host, dirs: dirs).1

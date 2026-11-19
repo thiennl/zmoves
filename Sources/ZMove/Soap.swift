@@ -12,7 +12,7 @@ public struct SoapFault: Error {
     }
 }
 
-public final class AdminSoap {
+ open class AdminSoap {
     public let host: Host
     public let port: Int
     public let user: String?
@@ -67,7 +67,7 @@ public final class AdminSoap {
     }
 
     @discardableResult
-    public func token() throws -> String {
+     open func token() throws -> String {
         if let t = tokenValue { return t }
         if host.dryRun { return "dry-run" }
         let user = self.user ?? (try? host.out("zmlocalconfig -m nokey zimbra_ldap_user")) ?? "zimbra"
@@ -100,9 +100,9 @@ public final class AdminSoap {
 
     public func setToken(_ t: String) { tokenValue = t }
 
-    @discardableResult
-    public func call(_ name: String, payload: [String: Any],
-                     mutating: Bool = true) throws -> [String: Any] {
+     @discardableResult
+     open func call(_ name: String, payload: [String: Any],
+                      mutating: Bool = true) throws -> [String: Any] {
         var req: [String: Any] = ["_jsns": "urn:zimbraAdmin"]
         payload.forEach { req[$0.key] = $0.value }
         let b = try post([name: req], token: try token(), mutating: mutating)
@@ -138,7 +138,7 @@ public final class AdminSoap {
     /// src/dest are safety checks (src must equal the account's current
     /// mailHost, dest must be this server). Mirrors MboxMoveUtil.move().
     @discardableResult
-    public func moveMailbox(name: String, src: String, dest: String,
+     open func moveMailbox(name: String, src: String, dest: String,
                             sync: Bool = false, skipRemoteLockout: Bool = false,
                             ngMigration: Bool = false) throws -> [String: Any] {
         try call("MoveMailboxRequest", payload: ["account": [

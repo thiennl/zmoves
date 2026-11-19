@@ -72,7 +72,7 @@ func runLocal(_ argv: [String], input: String? = nil,
     return (out, err, p.terminationStatus, Date().timeIntervalSince(t0))
 }
 
-public final class Host: @unchecked Sendable {
+ open class Host: @unchecked Sendable {
     public let name: String
     public let settings: Settings
     public let dryRun: Bool
@@ -83,31 +83,33 @@ public final class Host: @unchecked Sendable {
         self.dryRun = dryRun
     }
 
-    public func sshArgv() -> [String] {
-        var argv = ["ssh", "-p", String(settings.sshPort),
-                    "-o", "BatchMode=yes",
-                    "-o", "ServerAliveInterval=30",
-                    "-o", "ControlMaster=auto",
-                    "-o", "ControlPath=\(ctrlDir)/%r@%h:%p",
-                    "-o", "ControlPersist=600"]
-        if let key = settings.sshKey { argv += ["-i", key] }
-        argv += settings.sshOptions
-        argv.append("\(settings.sshUser)@\(name)")
-        return argv
-    }
+     open func sshArgv() -> [String] {
+         var argv = ["ssh", "-p", String(settings.sshPort),
+                     "-o", "BatchMode=yes",
+                     "-o", "ServerAliveInterval=30",
+                     "-o", "ControlMaster=auto",
+                     "-o", "ControlPath=\(ctrlDir)/%r@%h:%p",
+                     "-o", "ControlPersist=600"]
+         if let key = settings.sshKey { argv += ["-i", key] }
+         argv += settings.sshOptions
+         argv.append("\(settings.sshUser)@\(name)")
+         return argv
+     }
+ 
+     /// Run as the zimbra user with a login shell (PATH includes /opt/zimbra/bin).
+     /// NOT `sudo -i`: it re-joins argv for the target login shell without
+     /// escaping `$`, so `$(...)` and awk `$1` would expand too early.
+     open func wrap(_ cmd: String) -> String {
+         let inner = "set -o pipefail; \(cmd)"
+         if settings.runAsZimbra && settings.sshUser != settings.zimbraUser {
+             return "sudo -n -u \(shellQuote(settings.zimbraUser)) -H bash -lc " +
+                 shellQuote("cd ~ 2>/dev/null; \(inner)")
+         }
+         return "bash -lc \(shellQuote(inner))"
+     }
 
-    /// Run as zimbra with a login shell (PATH includes /opt/zimbra/bin).
-    public func wrap(_ cmd: String) -> String {
-        let inner = "set -o pipefail; \(cmd)"
-        let quoted = "'" + inner.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        if settings.runAsZimbra && settings.sshUser != "zimbra" {
-            return "sudo -n -iu zimbra bash -lc \(quoted)"
-        }
-        return "bash -lc \(quoted)"
-    }
-
-    @discardableResult
-    public func run(_ cmd: String, input: String? = nil, check: Bool = true,
+     @discardableResult
+     open func run(_ cmd: String, input: String? = nil, check: Bool = true,
                     timeout: Double? = nil, mutating: Bool = true) throws -> CommandResult {
         let full = wrap(cmd)
         if dryRun && mutating {
@@ -122,7 +124,7 @@ public final class Host: @unchecked Sendable {
         return CommandResult(rc: rc, out: out, err: err, seconds: seconds)
     }
 
-    public func out(_ cmd: String, timeout: Double? = nil) throws -> String {
+     open func out(_ cmd: String, timeout: Double? = nil) throws -> String {
         try run(cmd, timeout: timeout, mutating: false).out
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -146,31 +148,41 @@ public func pipe(from src: Host, _ srcCmd: String, to dst: Host, _ dstCmd: Strin
     let p1 = Process(), p2 = Process()
     p1.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     p1.arguments = src.sshArgv() + [src.wrap(sc)]
-    let mid = Pipe()
-    p1.standardOutput = mid
-    let err1 = Pipe(); p1.standardError = err1
-    p2.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    p2.arguments = dst.sshArgv() + [dst.wrap(dc)]
-    p2.standardInput = mid
-    let err2 = Pipe(); p2.standardError = err2
-    try p1.run()
-    try p2.run()
-    // Deadline watchdog; outputs are small (mysqldump streams data via stdout).
-    let deadline = timeout.map { Date().addingTimeInterval($0) }
-    var timedOut = false
-    while p1.isRunning || p2.isRunning {
-        if let dl = deadline, Date() > dl {
-            p1.terminate(); p2.terminate(); timedOut = true; break
-        }
-        Thread.sleep(forTimeInterval: 0.05)
-    }
-    p1.waitUntilExit(); p2.waitUntilExit()
-    let e1 = String(data: err1.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-    let e2 = String(data: err2.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-    if timedOut {
-        throw TimeoutError(host: "\(src.name)->\(dst.name)", cmd: "\(srcCmd) | \(dstCmd)",
-                           seconds: timeout ?? 0)
-    }
+     let mid = Pipe()
+     p1.standardOutput = mid
+     p2.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+     p2.arguments = dst.sshArgv() + [dst.wrap(dc)]
+     p2.standardInput = mid
+     // Drain both stderr pipes concurrently: a chatty producer (1 MB on
+     // stderr) would block forever if we only read after waitUntilExit.
+     let err1 = Pipe(); p1.standardError = err1
+     var e1data = Data()
+     err1.fileHandleForReading.readabilityHandler = { e1data.append($0.availableData) }
+     let err2 = Pipe(); p2.standardError = err2
+     var e2data = Data()
+     err2.fileHandleForReading.readabilityHandler = { e2data.append($0.availableData) }
+     try p1.run()
+     try p2.run()
+     // Deadline watchdog; outputs are small (mysqldump streams data via stdout).
+     let deadline = timeout.map { Date().addingTimeInterval($0) }
+     var timedOut = false
+     while p1.isRunning || p2.isRunning {
+         if let dl = deadline, Date() > dl {
+             p1.terminate(); p2.terminate(); timedOut = true; break
+         }
+         Thread.sleep(forTimeInterval: 0.05)
+     }
+     p1.waitUntilExit(); p2.waitUntilExit()
+     err1.fileHandleForReading.readabilityHandler = nil
+     err2.fileHandleForReading.readabilityHandler = nil
+     e1data.append(err1.fileHandleForReading.readDataToEndOfFile())
+     e2data.append(err2.fileHandleForReading.readDataToEndOfFile())
+     let e1 = String(data: e1data, encoding: .utf8) ?? ""
+     let e2 = String(data: e2data, encoding: .utf8) ?? ""
+     if timedOut {
+         throw TimeoutError(host: "\(src.name)->\(dst.name)", cmd: "\(srcCmd) | \(dstCmd)",
+                            seconds: timeout ?? 0)
+     }
     if p1.terminationStatus != 0 {
         throw RemoteError(host: src.name, cmd: srcCmd,
                           rc: p1.terminationStatus, stderr: e1)

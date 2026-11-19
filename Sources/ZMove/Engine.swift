@@ -120,9 +120,13 @@ public final class Engine {
     public var dry: Bool
     public var progress: (String) -> Void
     public var confirm: (String) -> Bool
-    private var hosts: [String: Host] = [:]
-    private var servers: [String: ServerInfo] = [:]
-    public var lockSemaphore: DispatchSemaphore? = nil
+     internal var hosts: [String: Host] = [:]
+     internal var servers: [String: ServerInfo] = [:]
+     public var lockSemaphore: DispatchSemaphore? = nil
+     /// Test hooks (monkeypatch equivalents): consulted first when set.
+     internal var ctxHook: ((Job, Bool) throws -> Ctx)? = nil
+     internal var planHook: ((Job) throws -> [String: Any])? = nil
+     internal var lockoutHook: ((String, String, String) throws -> Void)? = nil
 
     public init(settings: Settings, state: State, dryRun: Bool = false,
                 progress: ((String) -> Void)? = nil,
@@ -290,8 +294,9 @@ public final class Engine {
     }
 
     // ------------------------------------------------------------------ planning
-    public func plan(job: Job) throws -> [String: Any] {
-        let srcH = host(job.src), dstH = host(job.dst)
+     public func plan(job: Job) throws -> [String: Any] {
+         if let h = planHook { return try h(job) }
+         let srcH = host(job.src), dstH = host(job.dst)
         let srcI = try server(job.src, refresh: true)
         let dstI = try server(job.dst, refresh: true)
         let acct = try accountInfo(host: dstH, account: job.account)
@@ -560,11 +565,12 @@ public final class Engine {
         public var bs: BlobSync
     }
 
-    public func ctx(job: Job, prepare: Bool = true) throws -> Ctx {
-        /// Rebuild DB/blob plans from the journal. prepare=true also makes sure the
-        /// destination group schema and the stage exist (needed to copy); cleanup
-        /// paths pass prepare=false.
-        let srcI = try server(job.src), dstI = try server(job.dst)
+     public func ctx(job: Job, prepare: Bool = true) throws -> Ctx {
+         if let h = ctxHook { return try h(job, prepare) }
+         /// Rebuild DB/blob plans from the journal. prepare=true also makes sure the
+         /// destination group schema and the stage exist (needed to copy); cleanup
+         /// paths pass prepare=false.
+         let srcI = try server(job.src), dstI = try server(job.dst)
         let d = job.data
         let vmapRaw = d["volume_map"] as? [String: Int] ?? [:]
         let vmap = Dictionary(uniqueKeysWithValues: vmapRaw.compactMap { k, v in Int(k).map { ($0, v) } })
@@ -602,11 +608,11 @@ public final class Engine {
         return t > 0 ? Double(t) : nil
     }
 
-    public func ma(_ host: Host, _ account: String, attrs: [String: String], check: Bool = true) throws {
-        /// zmprov -l ma with every argument shell-quoted.
-        let args = attrs.map { "\($0.key) \(shellQuote($0.value))" }.joined(separator: " ")
-        try host.run("zmprov -l ma \(shellQuote(account)) \(args)", check: check)
-    }
+     public func ma(_ host: Host, _ account: String, attrs: [String: String], check: Bool = true) throws {
+         /// zmprov -l ma; sorted keys keep multi-attr commands deterministic.
+         let args = attrs.sorted { $0.key < $1.key }.map { "\($0.key) \(shellQuote($0.value))" }.joined(separator: " ")
+         try host.run("zmprov -l ma \(shellQuote(account)) \(args)", check: check)
+     }
 
     @discardableResult
     public func restoreStatus(_ h: Host, job: Job, status: String) throws -> Bool {

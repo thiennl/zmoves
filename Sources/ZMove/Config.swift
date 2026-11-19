@@ -7,7 +7,8 @@ public struct Settings: Sendable {
     public var sshPort = 22
     public var sshKey: String? = nil
     public var sshOptions: [String] = []
-    public var runAsZimbra = false
+     public var runAsZimbra = false
+     public var zimbraUser = "zimbra"
     // mailstore -> mailstore SSH (used by rsync running on source)
     public var nodeSshUser = "zimbra"
     public var nodeSshPort = 22
@@ -111,7 +112,8 @@ private func loadConfigFile(_ path: String, into s: Settings) throws -> Settings
         case "ssh_port": s.sshPort = Int(val) ?? s.sshPort
         case "ssh_key": s.sshKey = val.isEmpty ? nil : val
         case "ssh_options": s.sshOptions = splitList(val)
-        case "run_as_zimbra": s.runAsZimbra = val.uppercased() == "TRUE"
+         case "run_as_zimbra": s.runAsZimbra = isTrueString(val)
+         case "zimbra_user": s.zimbraUser = val
         case "node_ssh_user": s.nodeSshUser = val
         case "node_ssh_port": s.nodeSshPort = Int(val) ?? s.nodeSshPort
         case "node_ssh_options": s.nodeSshOptions = val
@@ -122,13 +124,13 @@ private func loadConfigFile(_ path: String, into s: Settings) throws -> Settings
         case "admin_port": s.adminPort = Int(val) ?? s.adminPort
         case "admin_user": s.adminUser = val.isEmpty ? nil : val
         case "admin_password": s.adminPassword = val.isEmpty ? nil : val
-        case "verify_tls": s.verifyTLS = val.uppercased() == "TRUE"
+         case "verify_tls": s.verifyTLS = isTrueString(val)
         case "state_db": s.stateDb = val
         case "log_dir": s.logDir = val
         case "max_syncs": s.maxSyncs = Int(val) ?? s.maxSyncs
         case "sync_finish_threshold_ms": s.syncFinishThresholdMs = Int(val) ?? s.syncFinishThresholdMs
         case "rsync_bwlimit_kbps": s.rsyncBwlimitKbps = Int(val) ?? s.rsyncBwlimitKbps
-        case "ionice": s.ionice = val.uppercased() != "FALSE"
+         case "ionice": s.ionice = isTrueString(val)
         case "max_lock_seconds": s.maxLockSeconds = Int(val) ?? s.maxLockSeconds
         case "cutover_window": s.cutoverWindow = val.isEmpty ? nil : val
         case "verify": s.verify = val
@@ -156,8 +158,28 @@ private extension Settings {
     func expanded() -> Settings { var c = self; c.expand(); return c }
 }
 
-func validateSettings(_ s: Settings, source: String?) throws {
-    let wh = source.map { " (\($0))" } ?? ""
-    if s.maxSyncs < 1 { throw ConfigError.invalid("max_syncs must be >= 1", wh.isEmpty ? nil : source) }
-    if let w = s.cutoverWindow { _ = try parseWindow(w) }
-}
+ private func isTrueString(_ v: String) -> Bool {
+     ["TRUE", "YES", "1", "ON"].contains(v.uppercased())
+ }
+ 
+ func validateSettings(_ s: Settings, source: String?) throws {
+     let wh = source.map { " (\($0))" } ?? ""
+     let src: String? = wh.isEmpty ? nil : source
+     if s.maxSyncs < 1 { throw ConfigError.invalid("max_syncs must be >= 1", src) }
+     if s.syncFinishThresholdMs < 0 {
+         throw ConfigError.invalid("sync_finish_threshold_ms must be >= 0", src)
+     }
+     if s.rsyncBwlimitKbps < 0 {
+         throw ConfigError.invalid("rsync_bwlimit_kbps must be >= 0", src)
+     }
+     if s.maxLockSeconds < 0 { throw ConfigError.invalid("max_lock_seconds must be >= 0", src) }
+     if s.rsyncTimeout < 0 { throw ConfigError.invalid("rsync_timeout must be >= 0", src) }
+     if s.dbTimeout < 0 { throw ConfigError.invalid("db_timeout must be >= 0", src) }
+     if !["full", "count", "none"].contains(s.verify) {
+         throw ConfigError.invalid("verify must be full|count|none", src)
+     }
+     if !["delta", "full"].contains(s.dbStrategy) {
+         throw ConfigError.invalid("db_strategy must be delta|full", src)
+     }
+     if let w = s.cutoverWindow { _ = try parseWindow(w) }
+ }

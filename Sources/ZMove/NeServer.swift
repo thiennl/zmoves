@@ -37,15 +37,20 @@ public final class NeServerMove {
         return !cfgSkip
     }
 
-    private func host(_ name: String) -> Host {
-        Host(name: name, settings: settings)
-    }
-
-    private func soap(_ name: String) -> AdminSoap {
-        AdminSoap(host: host(name), port: settings.adminPort,
-                  user: settings.adminUser, password: settings.adminPassword,
-                  verifyTLS: settings.verifyTLS, tlsCA: settings.tlsCa)
-    }
+     internal var hosts: [String: Host] = [:]
+     internal var soapFactory: ((String) -> AdminSoap)? = nil
+ 
+     internal func host(_ name: String) -> Host {
+         if hosts[name] == nil { hosts[name] = Host(name: name, settings: settings) }
+         return hosts[name]!
+     }
+ 
+     internal func soap(_ name: String) -> AdminSoap {
+         if let f = soapFactory { return f(name) }
+         return AdminSoap(host: host(name), port: settings.adminPort,
+                   user: settings.adminUser, password: settings.adminPassword,
+                   verifyTLS: settings.verifyTLS, tlsCA: settings.tlsCa)
+     }
 
     private func mysql(_ name: String) -> MySQL {
         MySQL(host: host(name), mysqlBin: settings.mysqlBin,
@@ -200,7 +205,7 @@ public final class NeServerMove {
         let inp = try check(account: account, src: src, dst: dst, options: options)
         let acct = inp.account
         let pl = try build(account: acct, src: src, dst: dst, options: options, inp: inp)
-        register(account: acct.name, src: src, dst: dst)
+         try register(account: acct.name, src: src, dst: dst)
         let maxSyncs = (options["max_syncs"] as? Int) ?? neDefaultMaxSyncs
         let threshold = (options["sync_finish_threshold_ms"] as? Int) ?? neDefaultSyncThresholdMs
         let skipLockout = (options["skip_lockout"] as? Bool) ?? false
@@ -240,28 +245,30 @@ public final class NeServerMove {
                 "seconds": Date().timeIntervalSince1970 - started]
     }
 
-    private func register(account: String, src: String, dst: String) {
-        do {
-            try soap(src).call("RegisterMailboxMoveOutRequest",
-                               payload: ["account": ["name": account, "target": dst]])
-        } catch let e as SoapFault where e.code.hasSuffix("UNKNOWN_DOCUMENT")
-                                        || e.code.hasSuffix("UNKNOWN_SERVICE") {
-            say("source has no move-out registry (FOSS); continuing without it")
-        } catch {
-            say("register move-out on \(src) failed: \(error); continuing", level: "warning")
-        }
-    }
-
-    private func unregister(account: String, src: String, dst: String) {
-        do {
-            try soap(src).call("UnregisterMailboxMoveOutRequest",
-                               payload: ["account": ["name": account, "target": dst]])
-        } catch {
-            say("unregister move-out on \(src) failed: \(error)", level: "warning")
-        }
-    }
-
-    private func lock(account: String, src: String, dst: String, skipLockout: Bool) throws {
+     /// RegisterMailboxMoveOut on the source (ALREADY_BEING_MOVED_OUT aborts;
+     /// absent handler (FOSS) degrades to a warning so the same flow runs FOSS-to-FOSS).
+     internal func register(account: String, src: String, dst: String) throws {
+         do {
+             try soap(src).call("RegisterMailboxMoveOutRequest",
+                                payload: ["account": ["name": account, "target": dst]])
+         } catch let e as SoapFault where e.code.hasSuffix("UNKNOWN_DOCUMENT")
+                                         || e.code.hasSuffix("UNKNOWN_SERVICE") {
+             say("source has no move-out registry (FOSS); continuing without it")
+         } catch let e as SoapFault {
+             throw NeMoveError("register move-out on \(src) failed: \(e.code): \(e.reason)")
+         }
+     }
+ 
+     internal func unregister(account: String, src: String, dst: String) {
+         do {
+             try soap(src).call("UnregisterMailboxMoveOutRequest",
+                                payload: ["account": ["name": account, "target": dst]])
+         } catch {
+             say("unregister move-out on \(src) failed: \(error)", level: "warning")
+         }
+     }
+ 
+     internal func lock(account: String, src: String, dst: String, skipLockout: Bool) throws {
         let h = host(dst)
         let acct = try accountInfo(host: h, account: account)
         if acct.mailHost != src {

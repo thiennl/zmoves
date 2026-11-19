@@ -21,7 +21,7 @@ Requires Swift 6.1+ and `libsqlite3-dev` (system library target `CSQLite`).
 
 ```sh
 swift build
-swift test          # 15 tests: paths, SQL builders, State journal, config, CLI parsing
+ swift test          # 98 tests: engine, batch, caches, compat, shell, safety, paths, state, config, CLI parsing
 ./.build/debug/zmove --help
 ```
 

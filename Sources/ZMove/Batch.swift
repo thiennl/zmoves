@@ -69,21 +69,25 @@ public final class Batch {
     public let perServer: Int
     public let maxCutovers: Int
     public let dryRun: Bool
-    private let cutovers: DispatchSemaphore
-    private let sems: Semaphores
-
-    public init(settings: Settings, parallel: Int = 4, perServer: Int = 2,
-                maxCutovers: Int = 2, dryRun: Bool = false) {
-        self.settings = settings
-        self.parallel = max(1, parallel)
-        self.perServer = perServer
-        self.maxCutovers = max(1, maxCutovers)
-        self.dryRun = dryRun
-        self.cutovers = DispatchSemaphore(value: max(1, maxCutovers))
-        self.sems = Semaphores(perServer: perServer)
-    }
-
-    private func one(_ it: BatchItem, options: [String: Any]) -> (BatchItem, String?, String?) {
+     private let cutovers: DispatchSemaphore
+     private let sems: Semaphores
+     /// Test hooks (monkeypatch equivalents): consulted first when set.
+     internal var oneHook: ((BatchItem, [String: Any]) -> (BatchItem, String?, String?))? = nil
+     internal var askContinue: ((String) -> Bool) = confirmContinue
+ 
+     public init(settings: Settings, parallel: Int = 4, perServer: Int = 2,
+                 maxCutovers: Int = 2, dryRun: Bool = false) {
+         self.settings = settings
+         self.parallel = max(1, parallel)
+         self.perServer = perServer
+         self.maxCutovers = max(1, maxCutovers)
+         self.dryRun = dryRun
+         self.cutovers = DispatchSemaphore(value: max(1, maxCutovers))
+         self.sems = Semaphores(perServer: perServer)
+     }
+ 
+     internal func one(_ it: BatchItem, options: [String: Any]) -> (BatchItem, String?, String?) {
+         if let h = oneHook { return h(it, options) }
         if it.src == it.dst {
             return (it, nil, "MoveError: source and destination are the same server")
         }
@@ -150,7 +154,7 @@ public final class Batch {
             zlog("canary: failures in first \(first.count); stopping before remaining \(rest.count)")
             return results
         }
-        if !confirmContinue("canary ok (\(first.count) moved); continue with remaining \(rest.count)? [y/N] ") {
+         if !askContinue("canary ok (\(first.count) moved); continue with remaining \(rest.count)? [y/N] ") {
             zlog("canary paused by operator/non-TTY; \(rest.count) remaining skipped")
             return results
         }

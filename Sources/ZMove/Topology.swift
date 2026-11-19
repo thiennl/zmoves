@@ -163,14 +163,16 @@ public func accountInfo(host: Host, account: String) throws -> AccountInfo {
         if !canon.isEmpty { name = canon }
         break
     }
-    var aliases = attrs["zimbraMailAlias"] ?? []
-    aliases += (attrs["mail"] ?? []).filter { $0 != name }
-    aliases += attrs["zimbraMailDeliveryAddress"] ?? []
+     let aliasSet = Set((attrs["mail"] ?? []) + (attrs["zimbraMailAlias"] ?? []) +
+                        (attrs["zimbraMailDeliveryAddress"] ?? []))
+         .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+         .filter { !$0.isEmpty && $0 != name.lowercased() }
+     let aliases = Array(Set(aliasSet)).sorted()
     return AccountInfo(name: name, id: zid,
                        mailHost: firstAttr(attrs, "zimbraMailHost", default: "") ?? "",
                        mailTransport: firstAttr(attrs, "zimbraMailTransport", default: "") ?? "",
                        status: firstAttr(attrs, "zimbraAccountStatus", default: "active") ?? "active",
-                       aliases: Array(Set(aliases)))
+                        aliases: aliases)
 }
 
 public func mailboxRow(mysql: MySQL, accountId: String,

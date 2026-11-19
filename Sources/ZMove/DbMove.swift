@@ -61,7 +61,7 @@ public struct DbPlan: Sendable {
 }
 
 
-public final class DbMove {
+ open class DbMove {
     public var p: DbPlan
     public let src: MySQL
     public let dst: MySQL
@@ -250,7 +250,7 @@ public final class DbMove {
         }
     }
 
-    public func dropStage() throws {
+     open func dropStage() throws {
         try dst.execute("DROP DATABASE IF EXISTS `\(p.stage)`;")
     }
 

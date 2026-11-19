@@ -65,10 +65,10 @@ public func deleteMemcachedKeys(host: Host, accountId: String) throws -> Int {
         let p = Int(hp[hp.index(after: colon)...]) ?? 11211
         for tmpl in accountKeys {
             let key = tmpl.replacingOccurrences(of: "{id}", with: accountId)
-            let cmd = "exec 3<>/dev/tcp/\(h)/\(p) && printf 'delete %@\\r\\n' '\(key)' >&3 && " +
-                "timeout \(Int(memcachedTimeout)) head -1 <&3; exec 3>&-"
-            let r = runBestEffort(host: host,
-                                  cmd: "bash -c \(shellQuote(cmd))",
+             let cmd = "exec 3<>/dev/tcp/\(h)/\(p) && printf 'delete %s\\r\\n' \(shellQuote(key)) >&3 && " +
+                 "head -1 <&3; exec 3>&-"
+             let r = runBestEffort(host: host,
+                                   cmd: "timeout \(Int(memcachedTimeout)) bash -c \(shellQuote(cmd))",
                                   what: "memcached delete on \(hp)",
                                   timeout: memcachedTimeout + 5)
             if let out = r?.out, out.contains("DELETED") { deleted += 1 }

@@ -51,7 +51,7 @@ public struct TableInfo: Sendable {
     public var hasLocator: Bool { columns.contains(locatorColumn) }
 }
 
-public final class MySQL {
+ open class MySQL {
     public let host: Host
     public let mysqlBin: String
     public let mysqldumpBin: String
@@ -102,28 +102,28 @@ public final class MySQL {
         return rows
     }
 
-    public func scalar(_ sql: String, db: String? = nil,
-                       timeout: Double? = nil) -> String? {
+     open func scalar(_ sql: String, db: String? = nil,
+                        timeout: Double? = nil) -> String? {
         let rows = query(sql, db: db, timeout: timeout)
         return rows.first?.first ?? nil
     }
 
-    public func execute(_ sql: String, db: String? = nil,
-                        timeout: Double? = nil) throws {
-        let cmd = try clientCmd(db: db)
-        try host.run(cmd, input: sql, timeout: timeout, mutating: true)
-    }
-
-    public func schemaExists(_ schema: String) -> Bool {
-        scalar("SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name=\(q(schema))") == "1"
-    }
+     open func execute(_ sql: String, db: String? = nil,
+                         timeout: Double? = nil) throws {
+         let cmd = try clientCmd(db: db)
+         try host.run(cmd, input: sql, timeout: timeout, mutating: true)
+     }
+ 
+     open func schemaExists(_ schema: String) -> Bool {
+         scalar("SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name=\(q(schema))") == "1"
+     }
 
     public func tables(withColumn column: String, in schema: String) -> [String] {
         query("SELECT table_name FROM information_schema.columns WHERE table_schema=\(q(schema)) " +
               "AND column_name=\(q(column)) ORDER BY table_name").compactMap { $0.first ?? nil }
     }
 
-    public func allTables(_ schema: String) -> [String] {
+     open func allTables(_ schema: String) -> [String] {
         query("SELECT table_name FROM information_schema.tables WHERE table_schema=\(q(schema))")
             .compactMap { $0.first ?? nil }
     }

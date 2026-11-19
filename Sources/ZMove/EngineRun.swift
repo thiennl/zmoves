@@ -12,29 +12,30 @@ private final class AtomicBool {
 }
 
 extension Engine {
-    public func checkRunnable(job: Job) throws {
-        if job.data["rolled_back_at"] != nil {
-            throw EngineMoveError("job \(job.id) was rolled back; start a new move instead")
-        }
-        if job.phase.rawValue >= Phase.purged.rawValue {
-            throw EngineMoveError("job \(job.id) is purged; nothing to resume")
-        }
-        if job.status == "done" {
-            throw EngineMoveError("job \(job.id) is already done")
-        }
-        if job.status == "aborted" && job.phase.rawValue >= Phase.flipped.rawValue {
-            throw EngineMoveError("job \(job.id) was aborted after cutover; start a new move instead")
-        }
-        if job.status == "running", let owner = job.owner, !owner.isEmpty,
-           owner != State.ownerTag() {
-            throw EngineMoveError("job \(job.id) is still being run by \(owner); wait or use --force")
-        }
-        if job.status == "aborted" {
-            if let other = try? state.activeFor(job.accountId), other.id != job.id {
-                throw AlreadyMoving("ALREADY_BEING_MOVED: \(job.account) has active job \(other.id)")
-            }
-        }
-    }
+     public func checkRunnable(job: Job) throws {
+         if job.data["rolled_back_at"] != nil {
+             throw EngineMoveError("job \(job.id) was rolled back; start a new move instead")
+         }
+         if job.phase.rawValue >= Phase.purged.rawValue {
+             throw EngineMoveError("job \(job.id) is purged; nothing to resume")
+         }
+         if job.status == "done" {
+             throw EngineMoveError("job \(job.id) is already done")
+         }
+         if job.status == "aborted" && job.phase.rawValue >= Phase.flipped.rawValue {
+             throw EngineMoveError("job \(job.id) was aborted after cutover; start a new move instead")
+         }
+         if state.ownerAlive(job) && !optBool(job, "force") {
+             let age = Int(Date().timeIntervalSince1970 - job.heartbeat)
+             throw EngineMoveError("job \(job.id) is still being run by \(job.owner ?? "?") " +
+                 "(heartbeat \(age)s ago); wait for it, or use --force if that process is really gone")
+         }
+         if job.status == "aborted" {
+             if let other = try? state.activeFor(job.accountId), other.id != job.id {
+                 throw AlreadyMoving("ALREADY_BEING_MOVED: \(job.account) has active job \(other.id)")
+             }
+         }
+     }
 
     @discardableResult
     public func run(_ job: inout Job) throws -> Job {
@@ -319,10 +320,12 @@ extension Engine {
         }
     }
 
-    public func lockout(server: String, account: String, op: String) throws {
-        do {
-            try soap(server).lockout(account: account, op: op)
-        } catch let e as SoapFault {
+ 
+     public func lockout(server: String, account: String, op: String) throws {
+         if let h = lockoutHook { try h(server, account, op); return }
+         do {
+             try soap(server).lockout(account: account, op: op)
+         } catch let e as SoapFault {
             let benign = (op == "start" && e.code.uppercased().contains("MAINTENANCE")) ||
                 (op == "end" && (e.code == "service.NOT_FOUND" || e.code == "account.NO_SUCH_ACCOUNT"))
             if !benign { throw e }
@@ -445,36 +448,42 @@ extension Engine {
     }
 
     // ------------------------------------------------------------------ abort / rollback
-    public func restoreSource(job: Job) -> [String] {
-        var errors: [String] = []
-        if !optBool(job, "skip_lockout") {
-            do {
-                try lockout(server: job.src, account: job.account, op: "end")
-            } catch {
-                errors.append("LockoutMailbox(end) on \(job.src): \(error)")
-            }
-        }
-        let status = job.data["orig_status"] as? String ?? "active"
-        var restored = false
-        for hn in Array(Set([job.src, job.dst])) {
-            do {
-                if try restoreStatus(host(hn), job: job, status: status) { restored = true; break }
-            } catch {
-                errors.append("restore zimbraAccountStatus=\(status) via \(hn): \(error)")
-            }
-        }
-        if restored { errors = errors.filter { !$0.hasPrefix("restore zimbraAccountStatus") } }
-        return errors
-    }
+     public func restoreSource(job: Job) -> [String] {
+         var errors: [String] = []
+         if !optBool(job, "skip_lockout") {
+             do {
+                 try lockout(server: job.src, account: job.account, op: "end")
+             } catch {
+                 errors.append("LockoutMailbox(end) on \(job.src): \(error)")
+             }
+         }
+         let status = job.data["orig_status"] as? String ?? "active"
+         var ordered: [String] = []
+         for hn in [job.src, job.dst] where !ordered.contains(hn) { ordered.append(hn) }
+         var restored = false
+         for hn in ordered {
+             do {
+                 _ = try restoreStatus(host(hn), job: job, status: status)
+                 restored = true
+                 break
+             } catch {
+                 errors.append("restore zimbraAccountStatus=\(status) via \(hn): \(error)")
+             }
+         }
+         if restored {
+             return errors.filter { !$0.hasPrefix("restore zimbraAccountStatus") }
+         }
+         return errors
+     }
 
     @discardableResult
     public func abort(job: inout Job, reason: String = "manual") throws -> Job {
         if job.phase.rawValue >= Phase.flipped.rawValue {
             throw EngineMoveError("job \(job.id) is past the point of no return (FLIPPED); use `zmove rollback`")
         }
-        if job.status == "running" {
-            throw EngineMoveError("job \(job.id) is still being run; stop it first")
-        }
+         if job.status == "running" && state.ownerAlive(job) {
+             throw EngineMoveError("job \(job.id) is still being run by \(job.owner ?? "?"); stop it first")
+         }
         if job.phase.rawValue >= Phase.reserved.rawValue {
             do {
                 let c = try ctx(job: job, prepare: false)
